@@ -1,17 +1,16 @@
-import os
 import math
 import requests
 import json
-from ads_lib import get_library
+from ads_lib import ads_auth_headers, get_library
 from ads_lib import fix_journal_abbr
 from ads_lib import adsresponse_to_dict, dict_to_bib, dict_to_csv
 
 ######### Parameters #########
 # leave empty to export all your libraries or use comma-separated names of your libraries
-library_name = 'ML - unsupervised learning'
-export_format = 'bibtexabs' # citation style from ADS
-export_filename = 'Unsupervised_Learning'
-export_filetype = 'csv' # bib (default), CSV
+library_name = ''
+export_format = 'bibtex'  # citation style from ADS
+export_filename = 'export_bib'
+export_filetype = 'bib'  # bib (default), csv
 # A csv export is meant to help you keep track of the reading list, e.g. importing in Notion or topcat.
 # If exporting in csv, keep a selection of columns. Ignored in bib.
 # Select any of the Bibtex columns, and add extras that will appear empty in the CSV file.
@@ -37,11 +36,8 @@ filename = f'{export_filename}.{export_filetype}'
 
 #
 # Connect to ADS account
-t = json.load(open('mysecrets'))
-my_token = t['my_token']
 base_url = "https://api.adsabs.harvard.edu/v1/biblib"
-headers = {'Authorization': "Bearer " + my_token,
-           "Content-type": "application/json"}
+headers = ads_auth_headers()
 
 # Finds all your libraries
 r = requests.get(base_url+"/libraries",
@@ -87,6 +83,7 @@ s1 = start
 s2 = rows
 
 expbib = {}
+response = None
 
 for i in range(num_paginates):
     #
@@ -114,5 +111,6 @@ for i in range(num_paginates):
 with open(filename, 'w') as fout:
     final_bib = convert_dict(expbib, fout, columns=columns)
 
-print(response)
+if response is not None:
+    print(response)
 print(f'Library saved in {filename}')

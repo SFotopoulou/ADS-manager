@@ -105,7 +105,10 @@ venv.bak/
 
 # files
 mysecrets
-*.bib
-*.csv
+/*.bib
+/*.csv
 *.sav
 *~
+example_vault/pdfs/*.pdf
+example_vault/.obsidian/workspace.json
+example_vault/.obsidian/workspace-mobile.json

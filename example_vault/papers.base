@@ -1,0 +1,66 @@
+filters:
+  and:
+    - file.inFolder("papers")
+    - file.ext == "md"
+properties:
+  citekey:
+    displayName: Citekey
+  year:
+    displayName: Year
+  journal:
+    displayName: Journal
+  read_status:
+    displayName: Read
+  relevance:
+    displayName: Relevance
+  collections:
+    displayName: Collections
+  tags:
+    displayName: Tags
+  pdf:
+    displayName: PDF
+views:
+  - type: table
+    name: Reading list
+    order:
+      - file.name
+      - year
+      - journal
+      - read_status
+      - collections
+      - tags
+      - citekey
+      - pdf
+    sort:
+      - property: year
+        direction: DESC
+  - type: table
+    name: Unread
+    filters:
+      and:
+        - read_status == "unread"
+    order:
+      - file.name
+      - year
+      - journal
+      - collections
+      - tags
+      - citekey
+    sort:
+      - property: year
+        direction: DESC
+  - type: table
+    name: By collection
+    groupBy:
+      property: collections
+      direction: ASC
+    order:
+      - file.name
+      - year
+      - journal
+      - read_status
+      - tags
+      - citekey
+    sort:
+      - property: year
+        direction: DESC

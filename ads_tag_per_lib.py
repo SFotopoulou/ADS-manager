@@ -4,12 +4,12 @@
 import math
 import requests
 import json
-from ads_lib import dict_to_bib, get_library
+from ads_lib import ads_auth_headers, dict_to_bib, get_library
 from ads_lib import fix_journal_abbr
-from ads_lib import adsresponse_to_dict, sanitise_multi, add_keyword_tag, dict_to_bib
+from ads_lib import adsresponse_to_dict, sanitise_multi, add_keyword_tag
 
 ######### Parameters #########
-export_filename = 'EXPORT-TAG-AUG23.bib'
+export_filename = 'export_tagged.bib'
 export_format = 'bibtexabs'
 # leave empty to export all your libraries
 # or use comma-separated names of your libraries
@@ -24,11 +24,8 @@ tag_prefix = ''
 ######################################
 
 # Connect to ADS
-t = json.load(open('mysecrets'))
-my_token = t['my_token']
 base_url = "https://api.adsabs.harvard.edu/v1/biblib"
-headers = {'Authorization': "Bearer " + my_token,
-           "Content-type": "application/json"}
+headers = ads_auth_headers()
 
 # Find all your libraries
 r = requests.get(base_url+"/libraries",
@@ -53,9 +50,8 @@ config = {}
 config['headers'] = headers
 config['url'] = base_url
 
-fout = open(export_filename, 'w')
-
 bibcode_sum = 0
+response = None
 
 megalib = []
 for library in my_libraries:
@@ -105,13 +101,19 @@ for library in my_libraries:
         s2 = s2 + rows
         
 # sanitise multiple occurencies; merge keywords
+if not megalib:
+    raise SystemExit("No records to export.")
+
 final_dict = sanitise_multi(megalib)
-final_lib = dict_to_bib(final_dict)
-# 
 uniq_bibcodes = len(final_dict.keys())
-#
-print(f"Total {bibcode_sum} bibcodes, {uniq_bibcodes} unique ({round(100*uniq_bibcodes/bibcode_sum, 1)}%)")
+if bibcode_sum == 0:
+    print("Total 0 bibcodes")
+else:
+    print(f"Total {bibcode_sum} bibcodes, {uniq_bibcodes} unique ({round(100*uniq_bibcodes/bibcode_sum, 1)}%)")
+
+with open(export_filename, 'w') as fout:
+    dict_to_bib(final_dict, fout)
+
 print(f"Output in {export_filename}")
-fout.write(final_lib)
-fout.close()
-print(response)
+if response is not None:
+    print(response)

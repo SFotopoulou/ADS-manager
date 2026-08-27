@@ -1,0 +1,4 @@
+# Keep auth tokens out of agent / Tab / @ context
+mysecrets
+.env
+.env.*
