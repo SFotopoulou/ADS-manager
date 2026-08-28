@@ -1,6 +1,6 @@
 # ADS library and markdown reference manager
 
-This is package to help manage ADS libraries (download, merge, add keywords) and create a reference manager using Obsidian. The script 'vault.py' create a local vault in a specified location, downloads the selected libraries, and optionally the PDF from arXiv.
+This is package to help manage [ADS/Scixplorer](https://scixplorer.org/) libraries (download, merge, add keywords) and create a reference manager using [Obsidian](https://obsidian.md/). The script 'vault.py' create a local vault in a specified location, downloads the selected libraries, and optionally the PDF from [arXiv](https://arxiv.org/).
 
 ## Quick Setup
 
@@ -10,9 +10,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-
-
-## Usage
+## ADS authentication
 
 Provide your ADS API token in one of these ways (checked in order):
 
@@ -25,28 +23,63 @@ export ADS_API_TOKEN='your-token-here'
 To avoid storing the token in shell history, put it in a private file outside the repo (`chmod 600`) and source that file:
 
 ```bash
-# ~/.config/ads_megalib/env
+# ~/.config/ADS-manager/env
 export ADS_API_TOKEN='your-token-here'
 ```
 
 ```bash
-source ~/.config/ads_megalib/env
+source ~/.config/ADS-manager/env
 ```
 
-2. A local `mysecrets` file in the same folder as the scripts (see `example_mysecrets`). This file is gitignored and listed in `.cursorignore`.
+2. A local `mysecrets` file in the same folder as the scripts (see `example_mysecrets`), this file is gitignored.
 
 The code will use your token and fetch your library information.
 
 ## Scripts
-### Union of all libraries on ADS
-`megalib.py` **creates or updates a library on your ADS account** that is the union of all of your other libraries. Useful for using the metrics tools on ADS. Re-runs skip the mega library itself so its bibcodes are not fed back into the union.
 
-`python megalib.py`
+See also [Script Parameters](https://github.com/SFotopoulou/ADS-manager/edit/master/README.md#script-parameters) for a detail list.
+
+### Export libraries locally - plain version
+```
+python export.py --help
+usage: export.py [-h] [--library NAME]
+
+Export ADS libraries to a local BibTeX or CSV file.
+
+options:
+  -h, --help      show this help message and exit
+  --library NAME  ADS library to export. Repeat for several, or comma-separate. Default: all.
+```
+
+Output name, format, and columns are set at the top of this script. Auth: ADS_API_TOKEN or a local
+mysecrets file.
+
+`export.py` exports all or some of your libraries into a single local file (`.bib` or `.csv`). No optimisation on keywords.
+
+Repeat `--library` or comma-separate names. Omit it to export all libraries (or those in `library_name` at the top of the script).
+
+If `fix_journal` is True (default) and an entry that should have a BibTeX `journal` field is missing it, a warning is raised.
+Suppress all warnings with:
+
+`python -Wignore export.py`
+
 
 ### Export locally, preserve ADS library as keyword
-`tag.py` exports all or some of your libraries into a single local `.bib` file and edits the keywords to include the name of the ADS library.
+```
+python tag.py --help
+usage: tag.py [-h] [--library NAME]
 
-`python tag.py --library JADES`
+Export ADS libraries to BibTeX with library names as keywords.
+
+options:
+  -h, --help      show this help message and exit
+  --library NAME  ADS library to export. Repeat for several, or comma-separate. Default: all.
+
+Output filename, keyword tagging, and tag_prefix are set at the top of this script. Auth: ADS_API_TOKEN
+or a local mysecrets file.
+```
+
+`tag.py` exports all or some of your libraries into a single local `.bib` file and edits the keywords to include the name of the ADS library.
 
 Repeat `--library` or comma-separate names. Omit it to export all libraries (or those in `library_name` at the top of the script).
 
@@ -57,19 +90,48 @@ Suppress all warnings with:
 
 `python -Wignore tag.py`
 
-### Export libraries locally - plain version
-`export.py` exports all or some of your libraries into a single local file (`.bib` or `.csv`). No optimisation on keywords.
+### Union of all libraries on ADS
+```
+python megalib.py --help                 ok | ads_megalib py | at 10:16:11 
+usage: megalib.py [-h] [--name NAME]
 
-`python export.py --library JADES`
+Create or update an ADS library that is the union of all your other libraries. Re-runs skip the mega
+library so its bibcodes are not merged into itself.
 
-Same `--library` rule as `tag.py`.
+options:
+  -h, --help   show this help message and exit
+  --name NAME  Name of the merged ADS library (default: 'MEGALIB')
 
-If `fix_journal` is True (default) and an entry that should have a BibTeX `journal` field is missing it, a warning is raised.
-Suppress all warnings with:
+Auth: ADS_API_TOKEN or a local mysecrets file. Description defaults to mega_lib_description at the top of
+this script.
+```
+`megalib.py` **creates or updates a library on your ADS account** that is the union of all of your other libraries. Useful for using the metrics tools on ADS. Re-runs skip the mega library itself so its bibcodes are not fed back into the union.
 
-`python -Wignore export.py`
+
 
 ### Export into an Obsidian vault
+```
+python vault.py --help                   ok | ads_megalib py | at 10:16:04 
+usage: vault.py [-h] [--vault PATH] [--library NAME] [--fetch-pdfs] [--reclean] [--tag-prefix PREFIX]
+                [--library-tags-only] [--offline]
+
+Export ADS libraries into an Obsidian vault.
+
+options:
+  -h, --help           show this help message and exit
+  --vault PATH         Vault directory (overrides ADS_VAULT and the vault_root default)
+  --library NAME       ADS library to export. Repeat for several, or comma-separate. Default: all except
+                       skip_libraries.
+  --fetch-pdfs         Download missing arXiv PDFs into pdfs/{citekey}.pdf (never overwrites)
+  --reclean            Rewrite existing paper notes with cleaned titles/authors/abstracts; skip ADS fetch
+  --tag-prefix PREFIX  Prefix for ADS library tags (overrides tag_prefix in the script)
+  --library-tags-only  YAML tags are only ADS library names (same as keep_only_myads_tags)
+  --offline            Skip ADS and rebuild notes from library.bib and library_tagged.bib
+
+Vault path, tagging, and project BibTeX defaults are set at the top of this script. Auth: ADS_API_TOKEN
+or a local mysecrets file. With --offline, notes are rebuilt from library.bib and library_tagged.bib.
+```
+
 `vault.py` writes ADS libraries into a vault (default `example_vault/`): one markdown note per citekey (with YAML `tags`), per-collection BibTeX, `bib/library.bib`, `bib/library_tagged.bib`, and `projects/<name>/refs.bib` for Overleaf.
 
 Re-runs refresh catalogue YAML from ADS and do **not** overwrite `read_status`, `relevance`, `pdf`, or the note body below `<!-- ads-body -->`.
@@ -86,15 +148,7 @@ If ADS is unreachable (no token, network, or API error), `vault.py` rebuilds not
 
 Open the vault folder in Obsidian 1.9+. Enable the **Bases** core plugin (tables) and **PDF++** (annotation). ADS remains the catalogue; this vault is the reading and writing layer.
 
-## Megalib parameters
-
-At the top of `megalib.py` you can adjust the name and description of the new ADS library.
-
-`mega_lib_name = 'MEGALIB'`
-
-`mega_lib_description = "Union of all libraries"`
-
-This script writes to your ADS account. If a library named `mega_lib_name` already exists, bibcodes from your other libraries are added to it.
+## Script parameters
 
 ## Exportlib parameters
 
@@ -172,6 +226,15 @@ replace existing keywords with library names only (the “library tags only” o
 optional prefix prepended to each library tag:
 
 `tag_prefix = ''`
+
+## Megalib parameters
+At the top of `megalib.py` you can adjust the name and description of the new ADS library.
+
+`mega_lib_name = 'MEGALIB'`
+
+`mega_lib_description = "Union of all libraries"`
+
+This script writes to your ADS account. If a library named `mega_lib_name` already exists, bibcodes from your other libraries are added to it.
 
 ## Vault parameters
 
