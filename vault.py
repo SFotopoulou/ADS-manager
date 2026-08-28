@@ -417,29 +417,40 @@ def load_from_ads(selected_libraries=''):
 
 
 def find_offline_bib_paths(vault_root):
-    """library.bib and library_tagged.bib: explicit paths, vault bib/, then cwd."""
-    lib_candidates = []
-    tagged_candidates = []
-    if offline_library_bib.strip():
-        lib_candidates.append(os.path.abspath(os.path.expanduser(offline_library_bib)))
-    if offline_tagged_bib.strip():
-        tagged_candidates.append(os.path.abspath(os.path.expanduser(offline_tagged_bib)))
-    lib_candidates.extend([
-        os.path.join(vault_root, 'bib', 'library.bib'),
-        os.path.abspath('library.bib'),
-    ])
-    tagged_candidates.extend([
-        os.path.join(vault_root, 'bib', 'library_tagged.bib'),
-        os.path.abspath('library_tagged.bib'),
-    ])
+    """library.bib and library_tagged.bib: vault bib/ first, then cwd.
+
+    Relative names in offline_library_bib / offline_tagged_bib are looked up
+    inside the vault, then the working directory. Absolute paths are used as-is.
+    """
+    def candidates(configured, default_name):
+        configured = (configured or '').strip()
+        name = os.path.basename(configured) if configured else default_name
+        paths = [
+            os.path.join(vault_root, 'bib', name),
+            os.path.abspath(name),
+        ]
+        if configured:
+            expanded = os.path.abspath(os.path.expanduser(configured))
+            if os.path.isabs(os.path.expanduser(configured)):
+                paths.insert(0, expanded)
+            elif expanded not in paths:
+                paths.append(expanded)
+        return paths
 
     def first_existing(paths):
+        seen = set()
         for path in paths:
-            if path and os.path.isfile(path):
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            if os.path.isfile(path):
                 return os.path.abspath(path)
         return ''
 
-    return first_existing(lib_candidates), first_existing(tagged_candidates)
+    return (
+        first_existing(candidates(offline_library_bib, 'library.bib')),
+        first_existing(candidates(offline_tagged_bib, 'library_tagged.bib')),
+    )
 
 
 def load_from_bib_files(library_path, tagged_path):
