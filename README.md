@@ -1,5 +1,4 @@
-# ads_megalib
-Merge all ADS libraries into one
+# ADS library and markdown reference manager
 
 Shared helpers live in `core.py` (auth, library fetch, export parsing, journal names, keyword tagging, and file output). The scripts below import from that module.
 
