@@ -1,8 +1,8 @@
 # ADS library and markdown reference manager
 
-Shared helpers live in `core.py` (auth, library fetch, export parsing, journal names, keyword tagging, and file output). The scripts below import from that module.
+This is package to help manage ADS libraries (download, merge, add keywords) and create a reference manager using Obsidian. The script 'vault.py' create a local vault in a specified location, downloads the selected libraries, and optionally the PDF from arXiv.
 
-## Setup
+## Quick Setup
 
 ```bash
 python3 -m venv .venv
@@ -10,7 +10,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`tag.py` expands numeric ADS/UAT keyword codes using `UAT_list.json` (Unified Astronomy Thesaurus). A copy is included in this repo. To refresh it, download [UAT_list.json](https://github.com/astrothesaurus/UAT) from the official UAT repository and place it next to `core.py`.
+
 
 ## Usage
 
@@ -134,6 +134,7 @@ expand TeX journal abbreviations such as `\aj` to short names (e.g. AJ). Set to 
 
 ## Tag export parameters
 
+`tag.py` expands numeric ADS/UAT keyword codes using `UAT_list.json` (Unified Astronomy Thesaurus). A copy is included in this repo. To refresh it, download [UAT_list.json](https://github.com/astrothesaurus/UAT) from the official UAT repository and place it next to `core.py`.
 At the top of `tag.py` you can choose:
 
 the exported filename (overwritten if exists; `.bib` only):
