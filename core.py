@@ -338,7 +338,39 @@ def unique_bibcodes(libraries, config):
 
 def slug_library_name(name):
     """Filesystem- and YAML-friendly ADS library name."""
-    return name.replace(' ', '-').replace('_', '-')
+    return (name or '').replace(' ', '-').replace('_', '-')
+
+
+def split_library_names(library_name):
+    """Split a --library value into names; strips quotes around each part."""
+    names = []
+    for part in (library_name or '').split(','):
+        part = part.strip().strip('\'"').strip()
+        if part:
+            names.append(part)
+    return names
+
+
+def normalize_library_query(name):
+    """Lowercased slug for matching --library arguments to ADS names."""
+    return slug_library_name(name.strip().strip('\'"').strip()).lower()
+
+
+def wanted_library_slugs(library_name):
+    return {normalize_library_query(part) for part in split_library_names(library_name)}
+
+
+def slug_is_wanted(slug, wanted):
+    if not wanted:
+        return True
+    return normalize_library_query(slug) in wanted
+
+
+def collection_bib_stem(slug):
+    """Filename stem for bib/collections/<stem>.bib."""
+    text = slug_library_name(slug)
+    text = ''.join(ch if ch.isalnum() or ch in '._-' else '-' for ch in text)
+    return text.strip('-._') or 'collection'
 
 
 def union_library_slugs(skip_names=None):
@@ -372,12 +404,16 @@ def select_libraries(all_libraries, library_name='', skip_names=None):
             lib for lib in all_libraries
             if not is_union_library_name(lib['name'], skip_names)
         ]
-    lib_list = [item.lower().strip() for item in library_name.split(',') if item.strip()]
-    wanted = set(lib_list)
+    lib_list = split_library_names(library_name)
+    wanted_slugs = wanted_library_slugs(library_name)
+    wanted = {name.lower() for name in lib_list} | {
+        slug_library_name(name).lower() for name in lib_list
+    } | wanted_slugs
     selected = [
         lib for lib in all_libraries
         if lib['name'].lower() in wanted
         or slug_library_name(lib['name']).lower() in wanted
+        or normalize_library_query(lib['name']) in wanted_slugs
     ]
     if not selected:
         raise NameError(f"No libraries found named: {lib_list}")
@@ -389,7 +425,7 @@ def resolve_library_name(cli_libraries=None, default=''):
     if cli_libraries:
         names = []
         for item in cli_libraries:
-            names.extend(part.strip() for part in item.split(',') if part.strip())
+            names.extend(split_library_names(item))
         return ','.join(names)
     return default
 

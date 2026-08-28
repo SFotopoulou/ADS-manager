@@ -34,6 +34,9 @@ from core import (
     drop_union_collections,
     library_records_from_membership,
     is_union_library_name,
+    wanted_library_slugs,
+    slug_is_wanted,
+    collection_bib_stem,
 )
 
 ######### Parameters #########
@@ -462,18 +465,21 @@ def filter_by_selected_libraries(library_records, all_records, collections_by_ke
     """Keep records that belong to --library names (offline). Empty = all."""
     if not selected_libraries:
         return library_records, all_records, collections_by_key
-    wanted = {
-        slug_library_name(part.strip()).lower()
-        for part in selected_libraries.split(',')
-        if part.strip()
-    }
+    wanted = wanted_library_slugs(selected_libraries)
     if not library_records:
-        print('--library ignored offline: no collections (need library_tagged.bib).')
+        library_records = library_records_from_membership(
+            all_records, collections_by_key
+        )
+    if not library_records:
+        print(
+            '--library did not match any collection .bib membership; '
+            'notes will still use ADS library names when present.'
+        )
         return library_records, all_records, collections_by_key
     library_records = {
         slug: recs
         for slug, recs in library_records.items()
-        if slug.lower() in wanted
+        if slug_is_wanted(slug, wanted)
     }
     if not library_records:
         raise NameError(f'No libraries found named: {sorted(wanted)}')
@@ -482,7 +488,7 @@ def filter_by_selected_libraries(library_records, all_records, collections_by_ke
         keep.update(recs)
     all_records = {key: rec for key, rec in all_records.items() if key in keep}
     collections_by_key = {
-        key: [c for c in coll if slug_library_name(c).lower() in wanted]
+        key: [c for c in coll if slug_is_wanted(c, wanted)]
         for key, coll in collections_by_key.items()
         if key in keep
     }
@@ -490,29 +496,45 @@ def filter_by_selected_libraries(library_records, all_records, collections_by_ke
 
 
 def write_catalogue_bibs(root, library_records, all_records, tag_prefix_value,
-                         keep_only_library):
+                         keep_only_library, collections_by_key=None):
     skip = skipped_union_names()
+    coll_dir = os.path.join(root, 'bib', 'collections')
+    os.makedirs(coll_dir, exist_ok=True)
+    merged = {}
+    for slug, recs in (library_records or {}).items():
+        if recs:
+            merged.setdefault(slug, {}).update(recs)
+    rebuilt = library_records_from_membership(all_records, collections_by_key)
+    for slug, recs in rebuilt.items():
+        if recs:
+            merged.setdefault(slug, {}).update(recs)
     wrote = []
-    for slug, recs in library_records.items():
-        if is_union_library_name(slug, skip):
+    for slug, recs in merged.items():
+        if not recs or is_union_library_name(slug, skip):
             continue
-        write_bib(os.path.join(root, 'bib', 'collections', slug + '.bib'), recs)
+        path = os.path.join(coll_dir, collection_bib_stem(slug) + '.bib')
+        write_bib(path, recs)
         wrote.append(slug)
+        print(f'Wrote {len(recs)} records to {path}')
     write_bib(os.path.join(root, 'bib', 'library.bib'), all_records)
-    if library_records:
+    to_tag = {
+        slug: recs
+        for slug, recs in merged.items()
+        if recs and not is_union_library_name(slug, skip)
+    }
+    if to_tag:
         tagged = tag_library_records(
-            {
-                slug: recs
-                for slug, recs in library_records.items()
-                if not is_union_library_name(slug, skip)
-            },
+            to_tag,
             tag_prefix=tag_prefix_value,
             keep_only_library=keep_only_library,
             add_keyword=add_keyword,
         )
         write_bib(os.path.join(root, 'bib', 'library_tagged.bib'), tagged)
-    if wrote:
-        print('Wrote bib/collections/' + ', '.join(s + '.bib' for s in wrote))
+    if not wrote:
+        print(
+            f'No per-library files written under {coll_dir} '
+            f'(membership for {len(rebuilt)} collections).'
+        )
     return wrote
 
 
@@ -524,16 +546,12 @@ def overlay_collection_files(root, library_records, all_records, collections_by_
         os.path.join(root, 'bib', 'collections'), skip_names=skip
     )
     if selected_libraries:
-        wanted = {
-            slug_library_name(part.strip()).lower()
-            for part in selected_libraries.split(',')
-            if part.strip()
-        }
+        wanted = wanted_library_slugs(selected_libraries)
         dir_recs = {
-            slug: recs for slug, recs in dir_recs.items() if slug.lower() in wanted
+            slug: recs for slug, recs in dir_recs.items() if slug_is_wanted(slug, wanted)
         }
         dir_colls = {
-            key: [c for c in coll if slug_library_name(c).lower() in wanted]
+            key: [c for c in coll if slug_is_wanted(c, wanted)]
             for key, coll in dir_colls.items()
         }
     collections_by_key = drop_union_collections(
@@ -623,7 +641,9 @@ def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
     library_records, all_records, collections_by_key = overlay_collection_files(
         root, *loaded, selected_libraries=selected
     )
-    write_catalogue_bibs(root, library_records, all_records, prefix, keep_only)
+    write_catalogue_bibs(
+        root, library_records, all_records, prefix, keep_only, collections_by_key
+    )
     colls_by_cite = membership_by_citekey(collections_by_key)
     n_with = sum(
         1 for key in all_records
