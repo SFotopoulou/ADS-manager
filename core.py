@@ -1,5 +1,6 @@
 import math
 import os
+import copy
 import requests
 import json
 import warnings
@@ -10,6 +11,7 @@ from collections import OrderedDict
 # https://github.com/astrothesaurus/UAT
 UAT_LIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'UAT_list.json')
+ADS_BIBLIB_URL = 'https://api.adsabs.harvard.edu/v1/biblib'
 uris = None
 
 
@@ -25,7 +27,7 @@ def _load_uat(path=UAT_LIST_PATH):
         raise FileNotFoundError(
             "UAT_list.json is required to expand numeric ADS keywords. "
             "Download it from https://github.com/astrothesaurus/UAT "
-            "(UAT_list.json) and place it next to ads_lib.py."
+            "(UAT_list.json) and place it next to core.py."
         ) from exc
     mapping = {}
     for item in thesaurus:
@@ -310,6 +312,30 @@ def get_library(library_id, num_documents, config):
     return documents
 
 
+def biblib_config(headers):
+    """Config dict expected by get_library()."""
+    return {'headers': headers, 'url': ADS_BIBLIB_URL}
+
+
+def list_libraries(headers):
+    """Return library metadata dicts from the ADS biblib API."""
+    response = requests.get(
+        ADS_BIBLIB_URL + '/libraries', headers=headers, timeout=30
+    )
+    payload = response.json()
+    if 'libraries' not in payload:
+        raise ValueError(payload)
+    return payload['libraries']
+
+
+def unique_bibcodes(libraries, config):
+    """Union of bibcodes across libraries, first-seen order."""
+    bibs = []
+    for library in libraries:
+        bibs.extend(get_library(library['id'], library['num_documents'], config))
+    return list(dict.fromkeys(bibs))
+
+
 def slug_library_name(name):
     """Filesystem- and YAML-friendly ADS library name."""
     return name.replace(' ', '-').replace('_', '-')
@@ -326,6 +352,28 @@ def select_libraries(all_libraries, library_name='', skip_names=None):
         if not selected:
             raise NameError(f"No libraries found named: {lib_list}")
     return [lib for lib in selected if lib['name'].lower() not in skip]
+
+
+def resolve_library_name(cli_libraries=None, default=''):
+    """CLI --library list (repeatable or comma-separated), else default (empty = all)."""
+    if cli_libraries:
+        names = []
+        for item in cli_libraries:
+            names.extend(part.strip() for part in item.split(',') if part.strip())
+        return ','.join(names)
+    return default
+
+
+def add_library_argument(parser, extra_help='Default: all.'):
+    """Add --library to an ArgumentParser (repeatable, comma-separated)."""
+    parser.add_argument(
+        '--library',
+        action='append',
+        dest='libraries',
+        metavar='NAME',
+        help='ADS library to export. Repeat for several, or comma-separate. '
+             + extra_help,
+    )
 
 
 def export_bibcodes(bibcodes, headers, export_format='bibtexabs',
@@ -362,6 +410,8 @@ def export_bibcodes(bibcodes, headers, export_format='bibtexabs',
 def adsresponse_to_dict(bib_received):
 
     list_bib = bib_received.split('@')[1:]
+    if not list_bib:
+        return {}
     #
     # Extract abstract
     if 'abstract = ' in list_bib[0]:
@@ -425,11 +475,33 @@ def adsresponse_to_dict(bib_received):
                 except Exception as error:
                     print(row)
                     print("An exception occurred:", type(error).__name__, "–", error) # An exception occurred: ZeroDivisionError – division by zero
+
+            for key, value in _bib_line_fields(record).items():
+                if key not in temp_dict or not str(temp_dict.get(key) or '').strip():
+                    temp_dict[key] = value
     
             records[ads_key] = OrderedDict(temp_dict)
             
     #
     return records
+
+
+def _bib_line_fields(record_text):
+    """Parse field = value lines from one BibTeX record (offline files)."""
+    fields = OrderedDict()
+    for line in record_text.split('\n')[1:]:
+        stripped = line.strip().rstrip(',').strip()
+        if not stripped or stripped == '}':
+            continue
+        if '=' not in stripped:
+            continue
+        key, value = stripped.split('=', 1)
+        key = key.strip()
+        if not key or ' ' in key:
+            continue
+        fields[key] = value.strip()
+    return fields
+
 
 def fix_journal_abbr(bib_dict, format='short'):
     # 'short' prints abbreviated journal name; e.g. A&A, MNRAS, ApJ
@@ -524,6 +596,23 @@ def sanitise_multi(megalib):
                 else:
                     records[lib_key] = lib_value
     return records
+
+
+def tag_library_records(library_records, tag_prefix='', keep_only_library=False,
+                        add_keyword=True):
+    """Merge per-library records with ADS library names added as keywords."""
+    tagged = []
+    for slug, recs in library_records.items():
+        chunk = copy.deepcopy(recs)
+        if add_keyword:
+            chunk = add_keyword_tag(
+                chunk,
+                tag=f'{tag_prefix}{slug}',
+                only_myads=keep_only_library,
+            )
+        tagged.append(chunk)
+    return sanitise_multi(tagged)
+
 
 def dict_to_bib(records, fout, columns=''):
     # format for saving in .bib
@@ -787,7 +876,7 @@ def obsidian_tag(text):
 
 
 def ads_library_tag(library_name, tag_prefix=''):
-    """ADS library tag, same slug rule as ads_tag_per_lib.py."""
+    """ADS library tag, same slug rule as tag.py."""
     slug = library_name.replace(' ', '-').replace('_', '-')
     return obsidian_tag(f'{tag_prefix}{slug}')
 
@@ -1060,11 +1149,47 @@ def reclean_papers_dir(papers_dir):
 
 
 def arxiv_id_from_eprint(eprint):
+    """Return an arXiv id from an eprint/doi/url string, or ''."""
+    import re
     text = strip_bib_braces(eprint).strip()
     if not text:
         return ''
+    doi_arxiv = re.search(r'10\.48550/arXiv\.(\d{4}\.\d{4,5})', text, re.I)
+    if doi_arxiv:
+        return doi_arxiv.group(1)
+    url_arxiv = re.search(
+        r'arxiv(?:\.org/(?:abs|pdf)/|\.org/pdf/|[.:/]+)(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[a-z]{2})?/\d{7})',
+        text,
+        re.I,
+    )
+    if url_arxiv:
+        return url_arxiv.group(1)
     text = text.replace('arXiv:', '').replace('arxiv:', '').strip()
-    return text
+    if text.lower().startswith('10.') and 'arxiv' not in text.lower():
+        return ''
+    if re.fullmatch(r'\d{4}\.\d{4,5}(?:v\d+)?', text):
+        return text
+    if re.fullmatch(r'[a-z\-]+(?:\.[A-Za-z]{2})?/\d{7}', text, re.I):
+        return text
+    return ''
+
+
+def arxiv_id_from_record(record, note_text=None):
+    """arXiv id from a BibTeX record, then from an existing paper note."""
+    blobs = [
+        (record or {}).get('eprint', ''),
+        (record or {}).get('doi', ''),
+        (record or {}).get('adsurl', ''),
+        (record or {}).get('url', ''),
+    ]
+    if note_text:
+        meta, _ = parse_note_frontmatter(note_text)
+        blobs.extend([meta.get('eprint', ''), meta.get('doi', '')])
+    for blob in blobs:
+        arxiv_id = arxiv_id_from_eprint(blob)
+        if arxiv_id:
+            return arxiv_id
+    return ''
 
 
 def download_arxiv_pdf(eprint, dest_path, timeout=60):
@@ -1074,17 +1199,46 @@ def download_arxiv_pdf(eprint, dest_path, timeout=60):
     arxiv_id = arxiv_id_from_eprint(eprint)
     if not arxiv_id:
         return False
-    url = 'https://arxiv.org/pdf/' + arxiv_id
+    headers = {
+        'User-Agent': 'ads-megalib/1.0 (literature vault; +https://arxiv.org)',
+        'Accept': 'application/pdf',
+    }
+    urls = [
+        'https://arxiv.org/pdf/' + arxiv_id + '.pdf',
+        'https://arxiv.org/pdf/' + arxiv_id,
+        'https://export.arxiv.org/pdf/' + arxiv_id,
+    ]
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    response = requests.get(url, timeout=timeout, stream=True)
-    response.raise_for_status()
     tmp_path = dest_path + '.part'
-    with open(tmp_path, 'wb') as fout:
-        for chunk in response.iter_content(chunk_size=65536):
-            if chunk:
-                fout.write(chunk)
-    os.replace(tmp_path, dest_path)
-    return True
+    last_error = None
+    for url in urls:
+        try:
+            response = requests.get(
+                url, timeout=timeout, stream=True, headers=headers
+            )
+            response.raise_for_status()
+            ctype = response.headers.get('Content-Type', '')
+            if 'html' in ctype.lower():
+                last_error = ValueError('arXiv returned HTML for ' + arxiv_id)
+                continue
+            with open(tmp_path, 'wb') as fout:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        fout.write(chunk)
+            with open(tmp_path, 'rb') as fin:
+                magic = fin.read(5)
+            if magic != b'%PDF-':
+                last_error = ValueError('Not a PDF from ' + url)
+                continue
+            os.replace(tmp_path, dest_path)
+            return True
+        except Exception as exc:
+            last_error = exc
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    if last_error:
+        raise last_error
+    return False
 
 
 def filter_records(records, citekeys=None):
@@ -1100,7 +1254,7 @@ def filter_records(records, citekeys=None):
 
 
 def records_from_export_csv(path):
-    """Rebuild record dicts from a CSV written by ads_exportlib."""
+    """Rebuild record dicts from a CSV written by export.py."""
     import csv
     records = {}
     with open(path, newline='', encoding='utf-8') as fin:
@@ -1131,6 +1285,62 @@ def records_from_export_csv(path):
                     rec[field] = '{' + text + '}'
             records[ads_key] = rec
     return records
+
+
+def records_from_bib(path):
+    """Parse a BibTeX file written by export.py, tag.py, or vault.py."""
+    with open(path, encoding='utf-8') as fin:
+        return adsresponse_to_dict(fin.read())
+
+
+def _records_by_citekey(records):
+    return {citekey_from_ads_key(key): (key, rec) for key, rec in records.items()}
+
+
+def _keyword_match_key(term):
+    return obsidian_tag(term).lower()
+
+
+def merge_plain_and_tagged(plain_records, tagged_records):
+    """Catalogue from library.bib; collections from extra keywords in library_tagged.bib.
+
+    Returns library_records, all_records, collections_by_key.
+    """
+    plain_index = _records_by_citekey(plain_records or {})
+    tagged_index = _records_by_citekey(tagged_records or {})
+    citekeys = list(dict.fromkeys([*plain_index, *tagged_index]))
+
+    all_records = OrderedDict()
+    collections_by_key = {}
+    library_records = OrderedDict()
+
+    for citekey in citekeys:
+        plain_key, plain_rec = plain_index.get(citekey, (None, {}))
+        tagged_key, tagged_rec = tagged_index.get(citekey, (None, {}))
+        ads_key = plain_key or tagged_key
+        rec = OrderedDict()
+        rec.update(tagged_rec)
+        rec.update(plain_rec)
+        if tagged_rec.get('abstract'):
+            rec['abstract'] = tagged_rec['abstract']
+        if plain_rec.get('keywords'):
+            rec['keywords'] = plain_rec['keywords']
+        all_records[ads_key] = rec
+
+        plain_terms = keyword_terms_from_record(plain_rec) if plain_rec else []
+        tagged_terms = keyword_terms_from_record(tagged_rec) if tagged_rec else []
+        plain_keys = {_keyword_match_key(term) for term in plain_terms}
+        collections = []
+        if tagged_rec and plain_rec:
+            for term in tagged_terms:
+                if _keyword_match_key(term) not in plain_keys:
+                    collections.append(term)
+        collections_by_key[ads_key] = collections
+        for coll in collections:
+            slug = slug_library_name(coll)
+            library_records.setdefault(slug, OrderedDict())[ads_key] = rec
+
+    return library_records, all_records, collections_by_key
 
     
     

@@ -2,10 +2,15 @@
 # optional arXiv PDFs, and a project subset for Overleaf.
 import argparse
 import os
+import shutil
 import requests
-from ads_lib import (
+from core import (
+    add_library_argument,
     ads_auth_headers,
+    biblib_config,
     get_library,
+    list_libraries,
+    resolve_library_name,
     select_libraries,
     slug_library_name,
     export_bibcodes,
@@ -16,10 +21,13 @@ from ads_lib import (
     strip_bib_braces,
     write_paper_note,
     download_arxiv_pdf,
+    arxiv_id_from_record,
     filter_records,
-    records_from_export_csv,
     reclean_papers_dir,
     get_ads_token,
+    records_from_bib,
+    merge_plain_and_tagged,
+    tag_library_records,
 )
 
 ######### Parameters #########
@@ -35,7 +43,7 @@ sort_format = 'first_author asc'
 fix_journal = True
 # Download arXiv PDFs into pdfs/{citekey}.pdf when missing (never overwrites)
 fetch_pdfs = False
-# Same tagging as ads_tag_per_lib.py → YAML `tags`
+# Same tagging as tag.py → YAML `tags`
 add_keyword = True
 keep_only_myads_tags = False
 tag_prefix = ''
@@ -44,9 +52,9 @@ project_name = 'example'
 # Empty = all exported citekeys; or comma-separated citekeys; or an ADS library slug
 project_citekeys = ''
 project_collection = ''
-# If ADS auth is missing, optionally build the vault from a previous CSV export
-offline_csv = ''
-offline_collection = 'offline-export'
+# If ADS is unreachable, build from these BibTeX files (empty = auto-detect)
+offline_library_bib = 'library.bib'
+offline_tagged_bib = 'library_tagged.bib'
 ######################################
 
 VAULT_DIRS = (
@@ -69,7 +77,7 @@ Requires Obsidian 1.9+ with the **Bases** core plugin enabled (Settings → Core
 
 ![[papers.base]]
 
-Use the view tabs on the table: **Reading list**, **Unread**, and **By collection**. You can edit `read_status` and `relevance` in the table. `tags` come from ADS libraries (same rule as `ads_tag_per_lib.py`) plus keyword tags.
+Use the view tabs on the table: **Reading list**, **Unread**, and **By collection**. You can edit `read_status` and `relevance` in the table. `tags` come from ADS libraries (same rule as `tag.py`) plus keyword tags.
 
 ## Collections
 
@@ -78,6 +86,7 @@ Paper notes use `collections` from your ADS library names. Filter in the base wi
 Generated BibTeX:
 
 - `bib/library.bib` — union of exported libraries
+- `bib/library_tagged.bib` — same union with ADS library names in keywords
 - `bib/collections/<library>.bib` — one file per ADS library
 - `projects/example/refs.bib` — Overleaf subset (defaults to the full export)
 
@@ -85,7 +94,7 @@ Refresh from the repo root:
 
 ```bash
 source .venv/bin/activate
-python ads_vault.py --vault /path/to/this/vault
+python vault.py --vault /path/to/this/vault
 ```
 """
 
@@ -261,14 +270,7 @@ def parse_args():
         metavar='PATH',
         help='Vault directory (overrides ADS_VAULT and the vault_root default)',
     )
-    parser.add_argument(
-        '--library',
-        action='append',
-        dest='libraries',
-        metavar='NAME',
-        help='ADS library to export. Repeat for several, or comma-separate. '
-             'Default: all except skip_libraries.',
-    )
+    add_library_argument(parser, extra_help='Default: all except skip_libraries.')
     parser.add_argument(
         '--fetch-pdfs',
         action='store_true',
@@ -290,17 +292,12 @@ def parse_args():
         action='store_true',
         help='YAML tags are only ADS library names (same as keep_only_myads_tags)',
     )
+    parser.add_argument(
+        '--offline',
+        action='store_true',
+        help='Skip ADS and rebuild notes from library.bib and library_tagged.bib',
+    )
     return parser.parse_args()
-
-
-def resolve_library_name(cli_libraries=None):
-    """CLI --library list, else library_name (comma-separated, empty = all)."""
-    if cli_libraries:
-        names = []
-        for item in cli_libraries:
-            names.extend(part.strip() for part in item.split(',') if part.strip())
-        return ','.join(names)
-    return library_name
 
 
 def write_bib(path, records):
@@ -319,10 +316,8 @@ def token_available():
 
 def load_from_ads(selected_libraries=''):
     headers = ads_auth_headers()
-    base_url = 'https://api.adsabs.harvard.edu/v1/biblib'
-    config = {'headers': headers, 'url': base_url}
-    response = requests.get(base_url + '/libraries', headers=headers)
-    all_libraries = response.json()['libraries']
+    config = biblib_config(headers)
+    all_libraries = list_libraries(headers)
     skip = [name.strip() for name in skip_libraries.split(',') if name.strip()]
     my_libraries = select_libraries(
         all_libraries, selected_libraries, skip_names=skip
@@ -353,41 +348,158 @@ def load_from_ads(selected_libraries=''):
     return library_records, all_records, collections_by_key
 
 
-def load_from_csv(path, collection):
-    recs = records_from_export_csv(path)
-    collections_by_key = {key: [collection] for key in recs}
-    print(f'Loaded {len(recs)} records from {path} as collection {collection}')
-    return {collection: recs}, recs, collections_by_key
+def find_offline_bib_paths(vault_root):
+    """library.bib and library_tagged.bib: explicit paths, vault bib/, then cwd."""
+    lib_candidates = []
+    tagged_candidates = []
+    if offline_library_bib.strip():
+        lib_candidates.append(os.path.abspath(os.path.expanduser(offline_library_bib)))
+    if offline_tagged_bib.strip():
+        tagged_candidates.append(os.path.abspath(os.path.expanduser(offline_tagged_bib)))
+    lib_candidates.extend([
+        os.path.join(vault_root, 'bib', 'library.bib'),
+        os.path.abspath('library.bib'),
+    ])
+    tagged_candidates.extend([
+        os.path.join(vault_root, 'bib', 'library_tagged.bib'),
+        os.path.abspath('library_tagged.bib'),
+    ])
+
+    def first_existing(paths):
+        for path in paths:
+            if path and os.path.isfile(path):
+                return os.path.abspath(path)
+        return ''
+
+    return first_existing(lib_candidates), first_existing(tagged_candidates)
+
+
+def load_from_bib_files(library_path, tagged_path):
+    plain = records_from_bib(library_path) if library_path else {}
+    tagged = records_from_bib(tagged_path) if tagged_path else {}
+    if not plain and not tagged:
+        raise FileNotFoundError(
+            'Need library.bib and/or library_tagged.bib for an offline vault build.'
+        )
+    print(
+        f'Loaded {len(plain)} records from {library_path or "(no library.bib)"}, '
+        f'{len(tagged)} from {tagged_path or "(no library_tagged.bib)"}'
+    )
+    if not tagged:
+        print('No library_tagged.bib; YAML tags will come from journal keywords only.')
+    elif not plain:
+        print('No library.bib; collections cannot be split from journal keywords.')
+    return merge_plain_and_tagged(plain, tagged)
+
+
+def filter_by_selected_libraries(library_records, all_records, collections_by_key,
+                                 selected_libraries):
+    """Keep records that belong to --library names (offline). Empty = all."""
+    if not selected_libraries:
+        return library_records, all_records, collections_by_key
+    wanted = {
+        slug_library_name(part.strip()).lower()
+        for part in selected_libraries.split(',')
+        if part.strip()
+    }
+    if not library_records:
+        print('--library ignored offline: no collections (need library_tagged.bib).')
+        return library_records, all_records, collections_by_key
+    library_records = {
+        slug: recs
+        for slug, recs in library_records.items()
+        if slug.lower() in wanted
+    }
+    if not library_records:
+        raise NameError(f'No libraries found named: {sorted(wanted)}')
+    keep = set()
+    for recs in library_records.values():
+        keep.update(recs)
+    all_records = {key: rec for key, rec in all_records.items() if key in keep}
+    collections_by_key = {
+        key: [c for c in coll if slug_library_name(c).lower() in wanted]
+        for key, coll in collections_by_key.items()
+        if key in keep
+    }
+    return library_records, all_records, collections_by_key
+
+
+def write_catalogue_bibs(root, library_records, all_records, tag_prefix_value,
+                         keep_only_library):
+    for slug, recs in library_records.items():
+        write_bib(os.path.join(root, 'bib', 'collections', slug + '.bib'), recs)
+    write_bib(os.path.join(root, 'bib', 'library.bib'), all_records)
+    tagged = tag_library_records(
+        library_records,
+        tag_prefix=tag_prefix_value,
+        keep_only_library=keep_only_library,
+        add_keyword=add_keyword,
+    )
+    write_bib(os.path.join(root, 'bib', 'library_tagged.bib'), tagged)
+
+
+def copy_offline_bibs_into_vault(root, library_path, tagged_path):
+    dest_lib = os.path.join(root, 'bib', 'library.bib')
+    dest_tagged = os.path.join(root, 'bib', 'library_tagged.bib')
+    os.makedirs(os.path.join(root, 'bib'), exist_ok=True)
+    if library_path and os.path.abspath(library_path) != os.path.abspath(dest_lib):
+        shutil.copy2(library_path, dest_lib)
+        print(f'Copied {library_path} → {dest_lib}')
+    if tagged_path and os.path.abspath(tagged_path) != os.path.abspath(dest_tagged):
+        shutil.copy2(tagged_path, dest_tagged)
+        print(f'Copied {tagged_path} → {dest_tagged}')
+
+
+def load_from_ads_or_bib(root, selected, force_offline=False):
+    """ADS first; on failure or --offline, library.bib + library_tagged.bib."""
+    ads_error = None
+    if not force_offline and token_available():
+        try:
+            return load_from_ads(selected), True
+        except (FileNotFoundError, OSError, ValueError, KeyError,
+                requests.RequestException) as exc:
+            ads_error = exc
+            print(f'ADS unavailable ({exc}); falling back to local BibTeX')
+    elif not force_offline:
+        ads_error = 'no ADS token'
+        print('No ADS token; falling back to local BibTeX')
+    else:
+        print('Offline mode: using local BibTeX')
+
+    library_path, tagged_path = find_offline_bib_paths(root)
+    if not library_path and not tagged_path:
+        hint = f' ({ads_error})' if ads_error else ''
+        raise FileNotFoundError(
+            'Set ADS_API_TOKEN or provide library.bib and library_tagged.bib '
+            f'in the vault bib/ folder or the working directory.{hint}'
+        )
+    loaded = load_from_bib_files(library_path, tagged_path)
+    loaded = filter_by_selected_libraries(*loaded, selected)
+    copy_offline_bibs_into_vault(root, library_path, tagged_path)
+    return loaded, False
 
 
 def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
-         reclean_only=False, tag_prefix_cli=None, library_tags_only=False):
+         reclean_only=False, tag_prefix_cli=None, library_tags_only=False,
+         force_offline=False):
     root = resolve_vault_root(cli_vault)
     ensure_vault_layout(root)
     if reclean_only:
         n = reclean_papers_dir(os.path.join(root, 'papers'))
         print(f'Recleaned {n} paper notes in {root}')
         return
-    selected = resolve_library_name(cli_libraries)
+    selected = resolve_library_name(cli_libraries, library_name)
+    prefix = tag_prefix_cli if tag_prefix_cli is not None else tag_prefix
+    keep_only = library_tags_only or keep_only_myads_tags
 
-    csv_path = offline_csv.strip()
-    if token_available():
-        library_records, all_records, collections_by_key = load_from_ads(selected)
-    elif csv_path:
-        library_records, all_records, collections_by_key = load_from_csv(
-            csv_path, slug_library_name(offline_collection)
-        )
-    else:
-        raise FileNotFoundError(
-            "Set ADS_API_TOKEN or mysecrets, or set offline_csv to a previous export."
-        )
-
-    for slug, recs in library_records.items():
-        write_bib(os.path.join(root, 'bib', 'collections', slug + '.bib'), recs)
-    write_bib(os.path.join(root, 'bib', 'library.bib'), all_records)
+    (library_records, all_records, collections_by_key), from_ads = load_from_ads_or_bib(
+        root, selected, force_offline=force_offline
+    )
+    if from_ads:
+        write_catalogue_bibs(root, library_records, all_records, prefix, keep_only)
     print(f'{len(all_records)} unique records into {root}')
 
-    created = updated = pdfs = 0
+    created = updated = pdfs = pdf_exists = pdf_no_arxiv = 0
     papers_dir = os.path.join(root, 'papers')
     pdfs_dir = os.path.join(root, 'pdfs')
 
@@ -396,25 +508,33 @@ def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
         stem = safe_note_stem(citekey)
         note_path = os.path.join(papers_dir, stem + '.md')
         pdf_path = os.path.join(pdfs_dir, stem + '.pdf')
-        if fetch_pdfs_flag or fetch_pdfs:
-            try:
-                if download_arxiv_pdf(rec.get('eprint', ''), pdf_path):
-                    pdfs += 1
-            except Exception as exc:
-                print(f'PDF skip {citekey}: {exc}')
-        catalogue = record_catalogue(
-            ads_key,
-            rec,
-            collections_by_key.get(ads_key, []),
-            tag_prefix=tag_prefix_cli if tag_prefix_cli is not None else tag_prefix,
-            keep_only_library=library_tags_only or keep_only_myads_tags,
-            add_tags=add_keyword,
-        )
-        pdf_link = f'[[pdfs/{stem}.pdf]]' if os.path.exists(pdf_path) else ''
         existing = None
         if os.path.exists(note_path):
             with open(note_path, encoding='utf-8') as fin:
                 existing = fin.read()
+        if fetch_pdfs_flag or fetch_pdfs:
+            if os.path.exists(pdf_path):
+                pdf_exists += 1
+            else:
+                arxiv_id = arxiv_id_from_record(rec, existing)
+                if not arxiv_id:
+                    pdf_no_arxiv += 1
+                    print(f'PDF skip {citekey}: no arXiv id')
+                else:
+                    try:
+                        if download_arxiv_pdf(arxiv_id, pdf_path):
+                            pdfs += 1
+                    except Exception as exc:
+                        print(f'PDF skip {citekey}: {exc}')
+        catalogue = record_catalogue(
+            ads_key,
+            rec,
+            collections_by_key.get(ads_key, []),
+            tag_prefix=prefix if from_ads else '',
+            keep_only_library=keep_only,
+            add_tags=add_keyword,
+        )
+        pdf_link = f'[[pdfs/{stem}.pdf]]' if os.path.exists(pdf_path) else ''
         abstract = strip_bib_braces(rec.get('abstract', ''))
         action = write_paper_note(
             note_path, catalogue, abstract, existing, pdf_link=pdf_link
@@ -424,7 +544,12 @@ def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
         else:
             updated += 1
 
-    print(f'Notes created={created} updated={updated} pdfs_downloaded={pdfs}')
+    print(f'Notes created={created} updated={updated}')
+    if fetch_pdfs_flag or fetch_pdfs:
+        print(
+            f'PDFs downloaded={pdfs} already_present={pdf_exists} '
+            f'no_arxiv={pdf_no_arxiv}'
+        )
 
     project_dir = os.path.join(root, 'projects', project_name)
     os.makedirs(project_dir, exist_ok=True)
@@ -448,4 +573,5 @@ if __name__ == '__main__':
         reclean_only=args.reclean,
         tag_prefix_cli=args.tag_prefix,
         library_tags_only=args.library_tags_only,
+        force_offline=args.offline,
     )
