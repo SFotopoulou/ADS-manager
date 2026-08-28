@@ -341,17 +341,47 @@ def slug_library_name(name):
     return name.replace(' ', '-').replace('_', '-')
 
 
+def union_library_slugs(skip_names=None):
+    """Lowercased names/slugs for union libraries (e.g. MEGALIB) that are not collections."""
+    slugs = set()
+    for name in skip_names or []:
+        name = (name or '').strip()
+        if not name:
+            continue
+        slugs.add(name.lower())
+        slugs.add(slug_library_name(name).lower())
+    return slugs
+
+
+def is_union_library_name(name, skip_names=None):
+    if not name:
+        return False
+    skip = union_library_slugs(skip_names)
+    return name.lower() in skip or slug_library_name(name).lower() in skip
+
+
 def select_libraries(all_libraries, library_name='', skip_names=None):
-    """Filter ADS library metadata by comma-separated names; optionally skip some."""
-    skip = {n.lower() for n in (skip_names or [])}
+    """Filter ADS library metadata by comma-separated names; optionally skip some.
+
+    Empty library_name means every library except skip_names (the union
+    library, e.g. MEGALIB, is not treated as a collection). Explicit
+    --library names are kept even if they appear in skip_names.
+    """
     if library_name == '':
-        selected = list(all_libraries)
-    else:
-        lib_list = [item.lower().strip() for item in library_name.split(',')]
-        selected = [lib for lib in all_libraries if lib['name'].lower() in lib_list]
-        if not selected:
-            raise NameError(f"No libraries found named: {lib_list}")
-    return [lib for lib in selected if lib['name'].lower() not in skip]
+        return [
+            lib for lib in all_libraries
+            if not is_union_library_name(lib['name'], skip_names)
+        ]
+    lib_list = [item.lower().strip() for item in library_name.split(',') if item.strip()]
+    wanted = set(lib_list)
+    selected = [
+        lib for lib in all_libraries
+        if lib['name'].lower() in wanted
+        or slug_library_name(lib['name']).lower() in wanted
+    ]
+    if not selected:
+        raise NameError(f"No libraries found named: {lib_list}")
+    return selected
 
 
 def resolve_library_name(cli_libraries=None, default=''):
@@ -364,7 +394,7 @@ def resolve_library_name(cli_libraries=None, default=''):
     return default
 
 
-def add_library_argument(parser, extra_help='Default: all.'):
+def add_library_argument(parser, extra_help='Default: all individual libraries.'):
     """Add --library to an ArgumentParser (repeatable, comma-separated)."""
     parser.add_argument(
         '--library',
@@ -1130,6 +1160,14 @@ def write_paper_note(path, catalogue, abstract, existing_text=None, pdf_link='')
                 user_meta[key] = old_meta[key]
         if not user_meta['pdf'] and pdf_link:
             user_meta['pdf'] = pdf_link
+        old_coll = old_meta.get('collections') or []
+        if isinstance(old_coll, str):
+            old_coll = [old_coll] if old_coll else []
+        if not (catalogue.get('collections') or []) and old_coll:
+            catalogue['collections'] = list(old_coll)
+            extra = [t for t in (catalogue.get('tags') or []) if t]
+            coll_tags = [slug_library_name(c) for c in old_coll]
+            catalogue['tags'] = list(dict.fromkeys(coll_tags + extra))
         body = merge_note_body(old_body, abstract)
         action = 'updated'
     else:
@@ -1334,6 +1372,110 @@ def records_from_bib(path):
         return adsresponse_to_dict(fin.read())
 
 
+def membership_by_citekey(collections_by_key):
+    """Map citekey -> collection slugs (merges variant ADS keys for one paper)."""
+    out = {}
+    for ads_key, colls in (collections_by_key or {}).items():
+        cite = citekey_from_ads_key(ads_key)
+        bucket = out.setdefault(cite, [])
+        for coll in colls or []:
+            slug = slug_library_name(coll) if coll else ''
+            if slug and slug not in bucket:
+                bucket.append(slug)
+    return out
+
+
+def collections_for_record(ads_key, collections_by_key):
+    """Collection slugs for one record, matching on citekey if needed."""
+    if ads_key in (collections_by_key or {}):
+        found = [c for c in collections_by_key[ads_key] if c]
+        if found:
+            return found
+    return membership_by_citekey(collections_by_key).get(
+        citekey_from_ads_key(ads_key), []
+    )
+
+
+def records_and_collections_from_dir(collections_dir, skip_names=None):
+    """Load bib/collections/<slug>.bib → library_records and collections_by_key."""
+    library_records = OrderedDict()
+    collections_by_key = {}
+    if not collections_dir or not os.path.isdir(collections_dir):
+        return library_records, collections_by_key
+    for name in sorted(os.listdir(collections_dir)):
+        if not name.endswith('.bib'):
+            continue
+        slug = name[:-4]
+        if not slug or is_union_library_name(slug, skip_names):
+            continue
+        recs = records_from_bib(os.path.join(collections_dir, name))
+        library_records[slug] = recs
+        for ads_key in recs:
+            collections_by_key.setdefault(ads_key, [])
+            if slug not in collections_by_key[ads_key]:
+                collections_by_key[ads_key].append(slug)
+    return library_records, collections_by_key
+
+
+def merge_collection_maps(*maps):
+    """Union collection membership dicts, matching papers by citekey."""
+    merged = {}
+    cite_to_key = {}
+    for mapping in maps:
+        for ads_key, colls in (mapping or {}).items():
+            cite = citekey_from_ads_key(ads_key)
+            target = cite_to_key.get(cite, ads_key)
+            cite_to_key[cite] = target
+            bucket = merged.setdefault(target, [])
+            for coll in colls or []:
+                if not coll:
+                    continue
+                slug = slug_library_name(coll)
+                if slug and slug not in bucket:
+                    bucket.append(slug)
+    return merged
+
+
+def drop_union_collections(collections_by_key, skip_names=None):
+    """Remove MEGALIB (and other skip_names) from collection membership."""
+    skip = union_library_slugs(skip_names)
+    out = {}
+    for ads_key, colls in (collections_by_key or {}).items():
+        kept = []
+        for coll in colls or []:
+            if not coll:
+                continue
+            slug = slug_library_name(coll)
+            if slug.lower() in skip or coll.lower() in skip:
+                continue
+            if slug not in kept:
+                kept.append(slug)
+        out[ads_key] = kept
+    return out
+
+
+def library_records_from_membership(all_records, collections_by_key):
+    """Rebuild per-collection record dicts from membership + catalogue records."""
+    by_cite = {
+        citekey_from_ads_key(key): (key, rec) for key, rec in (all_records or {}).items()
+    }
+    library_records = OrderedDict()
+    for ads_key, colls in (collections_by_key or {}).items():
+        cite = citekey_from_ads_key(ads_key)
+        if ads_key in (all_records or {}):
+            key, rec = ads_key, all_records[ads_key]
+        elif cite in by_cite:
+            key, rec = by_cite[cite]
+        else:
+            continue
+        for coll in colls or []:
+            slug = slug_library_name(coll)
+            if not slug:
+                continue
+            library_records.setdefault(slug, OrderedDict())[key] = rec
+    return library_records
+
+
 def _records_by_citekey(records):
     return {citekey_from_ads_key(key): (key, rec) for key, rec in records.items()}
 
@@ -1342,10 +1484,11 @@ def _keyword_match_key(term):
     return obsidian_tag(term).lower()
 
 
-def merge_plain_and_tagged(plain_records, tagged_records):
+def merge_plain_and_tagged(plain_records, tagged_records, skip_names=None):
     """Catalogue from library.bib; collections from extra keywords in library_tagged.bib.
 
     Returns library_records, all_records, collections_by_key.
+    skip_names (e.g. MEGALIB) are never treated as collections.
     """
     plain_index = _records_by_citekey(plain_records or {})
     tagged_index = _records_by_citekey(tagged_records or {})
@@ -1375,10 +1518,12 @@ def merge_plain_and_tagged(plain_records, tagged_records):
         if tagged_rec and plain_rec:
             for term in tagged_terms:
                 if _keyword_match_key(term) not in plain_keys:
-                    collections.append(term)
+                    slug = slug_library_name(term)
+                    if slug and not is_union_library_name(slug, skip_names):
+                        if slug not in collections:
+                            collections.append(slug)
         collections_by_key[ads_key] = collections
-        for coll in collections:
-            slug = slug_library_name(coll)
+        for slug in collections:
             library_records.setdefault(slug, OrderedDict())[ads_key] = rec
 
     return library_records, all_records, collections_by_key

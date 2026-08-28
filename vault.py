@@ -28,14 +28,20 @@ from core import (
     records_from_bib,
     merge_plain_and_tagged,
     tag_library_records,
+    membership_by_citekey,
+    records_and_collections_from_dir,
+    merge_collection_maps,
+    drop_union_collections,
+    library_records_from_membership,
+    is_union_library_name,
 )
 
 ######### Parameters #########
 # Default vault folder if --vault and ADS_VAULT are unset
 vault_root = 'example_vault'
-# Leave empty to export all libraries, or comma-separated ADS library names
+# Leave empty to export all individual libraries as collections
 library_name = ''
-# Skip the union library so it is not treated as a collection
+# Union library: used for records if it is the only ADS library, never as a collection
 skip_libraries = 'MEGALIB'
 export_format = 'bibtexabs'
 bibtex_keyformat = '%1H%R'
@@ -275,7 +281,10 @@ def parse_args():
         metavar='PATH',
         help='Vault directory (overrides ADS_VAULT and the vault_root default)',
     )
-    add_library_argument(parser, extra_help='Default: all except skip_libraries.')
+    add_library_argument(
+        parser,
+        extra_help='Default: all individual libraries as collections (not MEGALIB).',
+    )
     parser.add_argument(
         '--fetch-pdfs',
         action='store_true',
@@ -305,6 +314,10 @@ def parse_args():
     return parser.parse_args()
 
 
+def skipped_union_names():
+    return [name.strip() for name in skip_libraries.split(',') if name.strip()]
+
+
 def write_bib(path, records):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as fout:
@@ -320,18 +333,55 @@ def token_available():
 
 
 def load_from_ads(selected_libraries=''):
+    """Fetch ADS libraries. Default: each individual library is a collection.
+
+    MEGALIB (skip_libraries) is not a collection unless named with --library.
+    If skipping it leaves no libraries, remaining libraries are still fetched
+    for records; collection membership then comes from bib/collections/ or
+    library_tagged.bib.
+    """
     headers = ads_auth_headers()
     config = biblib_config(headers)
     all_libraries = list_libraries(headers)
-    skip = [name.strip() for name in skip_libraries.split(',') if name.strip()]
-    my_libraries = select_libraries(
-        all_libraries, selected_libraries, skip_names=skip
-    )
-    print(f'Exporting {len(my_libraries)} libraries from ADS')
+    skip = skipped_union_names()
+    explicit = bool((selected_libraries or '').strip())
+
+    if explicit:
+        collection_libs = select_libraries(
+            all_libraries, selected_libraries, skip_names=None
+        )
+        record_libs = list(collection_libs)
+    else:
+        collection_libs = select_libraries(
+            all_libraries, '', skip_names=skip
+        )
+        record_libs = list(collection_libs)
+        if not record_libs:
+            record_libs = select_libraries(all_libraries, '', skip_names=None)
+            if record_libs:
+                print(
+                    f'No individual ADS libraries to use as collections '
+                    f'(skipped {", ".join(skip) or "MEGALIB"}). '
+                    f'Fetching {len(record_libs)} remaining libraries for records.'
+                )
+            else:
+                raise ValueError('No ADS libraries found.')
+
+    names = [slug_library_name(lib['name']) for lib in collection_libs]
+    if names:
+        print(f'Collections from {len(names)} ADS libraries: {", ".join(names)}')
+    else:
+        print(
+            'No ADS libraries used as collections. Membership will be filled '
+            'from bib/collections/*.bib or extra keywords in library_tagged.bib.'
+        )
+    print(f'Exporting {len(record_libs)} libraries from ADS')
+
+    collection_ids = {lib['id'] for lib in collection_libs}
     library_records = {}
     all_records = {}
     collections_by_key = {}
-    for library in my_libraries:
+    for library in record_libs:
         slug = slug_library_name(library['name'])
         bibs = get_library(library['id'], library['num_documents'], config)
         print(f'{slug} has {len(bibs)} bibcodes')
@@ -343,13 +393,23 @@ def load_from_ads(selected_libraries=''):
             sort_format=sort_format,
             fix_journal=fix_journal,
         )
-        library_records[slug] = recs
+        as_collection = library['id'] in collection_ids
+        if as_collection and not explicit and is_union_library_name(slug, skip):
+            as_collection = False
+        if as_collection:
+            library_records[slug] = recs
         for ads_key, rec in recs.items():
-            collections_by_key.setdefault(ads_key, [])
-            if slug not in collections_by_key[ads_key]:
-                collections_by_key[ads_key].append(slug)
             if ads_key not in all_records:
                 all_records[ads_key] = rec
+            if as_collection and slug not in collections_by_key.setdefault(ads_key, []):
+                collections_by_key[ads_key].append(slug)
+    if not explicit:
+        collections_by_key = drop_union_collections(collections_by_key, skip)
+        library_records = {
+            slug: recs
+            for slug, recs in library_records.items()
+            if not is_union_library_name(slug, skip)
+        }
     return library_records, all_records, collections_by_key
 
 
@@ -394,7 +454,7 @@ def load_from_bib_files(library_path, tagged_path):
         print('No library_tagged.bib; YAML tags will come from journal keywords only.')
     elif not plain:
         print('No library.bib; collections cannot be split from journal keywords.')
-    return merge_plain_and_tagged(plain, tagged)
+    return merge_plain_and_tagged(plain, tagged, skip_names=skipped_union_names())
 
 
 def filter_by_selected_libraries(library_records, all_records, collections_by_key,
@@ -431,16 +491,76 @@ def filter_by_selected_libraries(library_records, all_records, collections_by_ke
 
 def write_catalogue_bibs(root, library_records, all_records, tag_prefix_value,
                          keep_only_library):
+    skip = skipped_union_names()
+    wrote = []
     for slug, recs in library_records.items():
+        if is_union_library_name(slug, skip):
+            continue
         write_bib(os.path.join(root, 'bib', 'collections', slug + '.bib'), recs)
+        wrote.append(slug)
     write_bib(os.path.join(root, 'bib', 'library.bib'), all_records)
-    tagged = tag_library_records(
-        library_records,
-        tag_prefix=tag_prefix_value,
-        keep_only_library=keep_only_library,
-        add_keyword=add_keyword,
+    if library_records:
+        tagged = tag_library_records(
+            {
+                slug: recs
+                for slug, recs in library_records.items()
+                if not is_union_library_name(slug, skip)
+            },
+            tag_prefix=tag_prefix_value,
+            keep_only_library=keep_only_library,
+            add_keyword=add_keyword,
+        )
+        write_bib(os.path.join(root, 'bib', 'library_tagged.bib'), tagged)
+    if wrote:
+        print('Wrote bib/collections/' + ', '.join(s + '.bib' for s in wrote))
+    return wrote
+
+
+def overlay_collection_files(root, library_records, all_records, collections_by_key,
+                            selected_libraries=''):
+    """Union membership from bib/collections/<slug>.bib (skip MEGALIB)."""
+    skip = skipped_union_names()
+    dir_recs, dir_colls = records_and_collections_from_dir(
+        os.path.join(root, 'bib', 'collections'), skip_names=skip
     )
-    write_bib(os.path.join(root, 'bib', 'library_tagged.bib'), tagged)
+    if selected_libraries:
+        wanted = {
+            slug_library_name(part.strip()).lower()
+            for part in selected_libraries.split(',')
+            if part.strip()
+        }
+        dir_recs = {
+            slug: recs for slug, recs in dir_recs.items() if slug.lower() in wanted
+        }
+        dir_colls = {
+            key: [c for c in coll if slug_library_name(c).lower() in wanted]
+            for key, coll in dir_colls.items()
+        }
+    collections_by_key = drop_union_collections(
+        merge_collection_maps(collections_by_key, dir_colls), skip
+    )
+    for slug, recs in dir_recs.items():
+        if is_union_library_name(slug, skip):
+            continue
+        library_records.setdefault(slug, {}).update(recs)
+        for ads_key, rec in recs.items():
+            if ads_key not in all_records:
+                all_records[ads_key] = rec
+    rebuilt = library_records_from_membership(all_records, collections_by_key)
+    for slug, recs in rebuilt.items():
+        if is_union_library_name(slug, skip):
+            continue
+        library_records.setdefault(slug, {}).update(recs)
+    library_records = {
+        slug: recs
+        for slug, recs in library_records.items()
+        if recs and not is_union_library_name(slug, skip)
+    }
+    if selected_libraries:
+        return filter_by_selected_libraries(
+            library_records, all_records, collections_by_key, selected_libraries
+        )
+    return library_records, all_records, collections_by_key
 
 
 def copy_offline_bibs_into_vault(root, library_path, tagged_path):
@@ -497,12 +617,22 @@ def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
     prefix = tag_prefix_cli if tag_prefix_cli is not None else tag_prefix
     keep_only = library_tags_only or keep_only_myads_tags
 
-    (library_records, all_records, collections_by_key), from_ads = load_from_ads_or_bib(
+    loaded, from_ads = load_from_ads_or_bib(
         root, selected, force_offline=force_offline
     )
-    if from_ads:
-        write_catalogue_bibs(root, library_records, all_records, prefix, keep_only)
-    print(f'{len(all_records)} unique records into {root}')
+    library_records, all_records, collections_by_key = overlay_collection_files(
+        root, *loaded, selected_libraries=selected
+    )
+    write_catalogue_bibs(root, library_records, all_records, prefix, keep_only)
+    colls_by_cite = membership_by_citekey(collections_by_key)
+    n_with = sum(
+        1 for key in all_records
+        if collections_by_key.get(key) or colls_by_cite.get(citekey_from_ads_key(key))
+    )
+    print(
+        f'{len(all_records)} unique records into {root}; '
+        f'{n_with} with collections ({len(library_records)} libraries)'
+    )
 
     created = updated = pdfs = pdf_exists = pdf_no_arxiv = 0
     papers_dir = os.path.join(root, 'papers')
@@ -531,10 +661,14 @@ def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
                             pdfs += 1
                     except Exception as exc:
                         print(f'PDF skip {citekey}: {exc}')
+        colls = [
+            c for c in (colls_by_cite.get(citekey) or collections_by_key.get(ads_key) or [])
+            if c
+        ]
         catalogue = record_catalogue(
             ads_key,
             rec,
-            collections_by_key.get(ads_key, []),
+            colls,
             tag_prefix=prefix if from_ads else '',
             keep_only_library=keep_only,
             add_tags=add_keyword,

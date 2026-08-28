@@ -20,9 +20,11 @@ from core import (
 ######### Parameters #########
 export_filename = 'library_tagged.bib'
 export_format = 'bibtexabs'
-# leave empty to export all your libraries
+# leave empty to export all your individual libraries
 # or use comma-separated names of your libraries
 library_name = ''
+# Union library is not a collection unless named with --library
+skip_libraries = 'MEGALIB'
 bibtex_keyformat = "%1H%R"
 sort_format = "first_author asc"
 # Use short or long journal names instead of journal TeX abbreviations; \aj
@@ -41,7 +43,10 @@ def parse_args():
             'Auth: ADS_API_TOKEN or a local mysecrets file.'
         ),
     )
-    add_library_argument(parser)
+    add_library_argument(
+        parser,
+        extra_help='Default: all individual libraries (not MEGALIB).',
+    )
     return parser.parse_args()
 
 
@@ -49,7 +54,10 @@ def main(cli_libraries=None):
     selected = resolve_library_name(cli_libraries, library_name)
     headers = ads_auth_headers()
     config = biblib_config(headers)
-    my_libraries = select_libraries(list_libraries(headers), selected)
+    skip_names = [n.strip() for n in skip_libraries.split(',') if n.strip()]
+    my_libraries = select_libraries(
+        list_libraries(headers), selected, skip_names=skip_names
+    )
     print(f"Exporting from {len(my_libraries)} libraries")
 
     tagged = []
