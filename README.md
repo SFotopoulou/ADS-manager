@@ -37,7 +37,7 @@ The code will use your token and fetch your library information.
 
 ## Scripts
 
-See also [Script Parameters](https://github.com/SFotopoulou/ADS-manager/edit/master/README.md#script-parameters) for a detail list.
+See also [Script Parameters](https://github.com/SFotopoulou/ADS-manager/tree/master#scripts) for a detailed options list.
 
 ### Export libraries locally - plain version
 ```
