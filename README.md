@@ -12,7 +12,7 @@ pip install -r requirements.txt
 
 ## ADS authentication
 
-Provide your ADS API token in one of these ways (checked in order):
+Provide your [ADS API token](https://ui.adsabs.harvard.edu/help/api/) in one of these ways (checked in order):
 
 1. Environment variable (preferred; keeps the token out of the project folder):
 
