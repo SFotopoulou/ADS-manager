@@ -407,9 +407,50 @@ def export_bibcodes(bibcodes, headers, export_format='bibtexabs',
     return records
 
 
+def _is_bib_entry_start(text, index):
+    """True if text[index] is '@' starting a BibTeX record (@TYPE{key)."""
+    if index >= len(text) or text[index] != '@':
+        return False
+    pos = index + 1
+    if pos >= len(text) or not text[pos].isalpha():
+        return False
+    while pos < len(text) and text[pos].isalpha():
+        pos += 1
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    return pos < len(text) and text[pos] == '{'
+
+
+def split_bib_records(bib_text):
+    """Split a .bib blob into records. Ignores '@' inside braces (e.g. abstracts)."""
+    records = []
+    start = None
+    depth = 0
+    pos = 0
+    length = len(bib_text)
+    while pos < length:
+        char = bib_text[pos]
+        if char == '\\' and pos + 1 < length:
+            pos += 2
+            continue
+        if char == '{' :
+            depth += 1
+        elif char == '}':
+            if depth > 0:
+                depth -= 1
+        elif depth == 0 and _is_bib_entry_start(bib_text, pos):
+            if start is not None:
+                records.append(bib_text[start:pos])
+            start = pos
+        pos += 1
+    if start is not None:
+        records.append(bib_text[start:])
+    return records
+
+
 def adsresponse_to_dict(bib_received):
 
-    list_bib = bib_received.split('@')[1:]
+    list_bib = [chunk.lstrip()[1:] for chunk in split_bib_records(bib_received)]
     if not list_bib:
         return {}
     #
