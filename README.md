@@ -136,8 +136,6 @@ or a local mysecrets file. With --offline, notes are rebuilt from library.bib an
 
 Re-runs refresh catalogue YAML from ADS and do **not** overwrite `read_status`, `relevance`, `pdf`, or the note body below `<!-- ads-body -->`.
 
-`python vault.py --vault /path/to/your/vault --library "ML - unsupervised learning" --fetch-pdfs`
-
 `--vault` wins over `ADS_VAULT`, which wins over the `vault_root` default (`example_vault/`). `~` is expanded.
 
 Repeat `--library` or comma-separate names. Omit it to export all libraries except those in `skip_libraries`.
@@ -150,7 +148,7 @@ Open the vault folder in Obsidian 1.9+. Enable the **Bases** core plugin (tables
 
 ## Script parameters
 
-## Exportlib parameters
+### Exportlib parameters
 
 At the top of `export.py` you can choose:
 
@@ -186,7 +184,7 @@ expand TeX journal abbreviations such as `\aj` to short names (e.g. AJ). Set to 
 
 `fix_journal = True`
 
-## Tag export parameters
+### Tag export parameters
 
 `tag.py` expands numeric ADS/UAT keyword codes using `UAT_list.json` (Unified Astronomy Thesaurus). A copy is included in this repo. To refresh it, download [UAT_list.json](https://github.com/astrothesaurus/UAT) from the official UAT repository and place it next to `core.py`.
 At the top of `tag.py` you can choose:
@@ -227,7 +225,7 @@ optional prefix prepended to each library tag:
 
 `tag_prefix = ''`
 
-## Megalib parameters
+### Megalib parameters
 At the top of `megalib.py` you can adjust the name and description of the new ADS library.
 
 `mega_lib_name = 'MEGALIB'`
@@ -236,7 +234,7 @@ At the top of `megalib.py` you can adjust the name and description of the new AD
 
 This script writes to your ADS account. If a library named `mega_lib_name` already exists, bibcodes from your other libraries are added to it.
 
-## Vault parameters
+### Vault parameters
 
 At the top of `vault.py`:
 
