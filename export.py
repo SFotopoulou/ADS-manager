@@ -35,7 +35,11 @@ fix_journal = True
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Export ADS libraries to a local BibTeX or CSV file.'
+        description='Export ADS libraries to a local BibTeX or CSV file.',
+        epilog=(
+            'Output name, format, and columns are set at the top of this script. '
+            'Auth: ADS_API_TOKEN or a local mysecrets file.'
+        ),
     )
     add_library_argument(parser)
     return parser.parse_args()

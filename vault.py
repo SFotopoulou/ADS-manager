@@ -263,7 +263,12 @@ def resolve_vault_root(cli_path=None):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Export ADS libraries into an Obsidian vault.'
+        description='Export ADS libraries into an Obsidian vault.',
+        epilog=(
+            'Vault path, tagging, and project BibTeX defaults are set at the top of this script. '
+            'Auth: ADS_API_TOKEN or a local mysecrets file. '
+            'With --offline, notes are rebuilt from library.bib and library_tagged.bib.'
+        ),
     )
     parser.add_argument(
         '--vault',

@@ -35,7 +35,11 @@ tag_prefix = ''
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Export ADS libraries to BibTeX with library names as keywords.'
+        description='Export ADS libraries to BibTeX with library names as keywords.',
+        epilog=(
+            'Output filename, keyword tagging, and tag_prefix are set at the top of this script. '
+            'Auth: ADS_API_TOKEN or a local mysecrets file.'
+        ),
     )
     add_library_argument(parser)
     return parser.parse_args()
