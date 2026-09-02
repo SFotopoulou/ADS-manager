@@ -128,11 +128,11 @@ options:
   --library-tags-only  YAML tags are only ADS library names (same as keep_only_myads_tags)
   --offline            Skip ADS and rebuild notes from library.bib and library_tagged.bib
 
-Vault path, tagging, and project BibTeX defaults are set at the top of this script. Auth: ADS_API_TOKEN
+Vault path and tagging defaults are set at the top of this script. Auth: ADS_API_TOKEN
 or a local mysecrets file. With --offline, notes are rebuilt from library.bib and library_tagged.bib.
 ```
 
-`vault.py` writes ADS libraries into a vault (default `example_vault/`): one markdown note per citekey (with YAML `tags`), per-collection BibTeX, `bib/library.bib`, `bib/library_tagged.bib`, and `projects/<name>/refs.bib` for Overleaf.
+`vault.py` writes ADS libraries into a vault (default `example_vault/`): one markdown note per citekey (with YAML `tags`), per-collection BibTeX, `bib/library.bib`, and `bib/library_tagged.bib`.
 
 Re-runs refresh catalogue YAML from ADS and do **not** overwrite `read_status`, `relevance`, `pdf`, or the note body below `<!-- ads-body -->`.
 
@@ -265,14 +265,6 @@ ADS library names as Obsidian `tags` (same slug rule as `tag.py`). Also add keyw
 `tag_prefix = ''`
 
 Or: `python vault.py --tag-prefix my- --library-tags-only`
-
-Overleaf subset directory and optional citekey/collection filter:
-
-`project_name = 'example'`
-
-`project_citekeys = ''`
-
-`project_collection = ''`
 
 If ADS is unavailable, rebuild from `export.py` / `tag.py` output (`library.bib` and `library_tagged.bib`). Empty = auto-detect in vault `bib/` then the working directory:
 

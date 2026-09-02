@@ -1,6 +1,6 @@
 # Literature
 
-ADS is the catalogue. This vault is the reading and writing layer: one note per paper, local PDFs, and BibTeX for Overleaf.
+ADS is the catalogue. This vault is the reading and writing layer: one note per paper, local PDFs, and generated BibTeX.
 
 Requires Obsidian 1.9+ with the **Bases** core plugin enabled (Settings → Core plugins → Bases). **PDF++** is recommended for annotating files in `pdfs/`.
 
@@ -19,7 +19,6 @@ Generated BibTeX:
 - `bib/library.bib` — union of exported libraries
 - `bib/library_tagged.bib` — same union with ADS library names in keywords
 - `bib/collections/<library>.bib` — one file per ADS library
-- `projects/example/refs.bib` — Overleaf subset (defaults to the full export)
 
 Refresh from the repo root:
 

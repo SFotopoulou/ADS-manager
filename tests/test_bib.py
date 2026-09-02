@@ -58,5 +58,26 @@ class MergeTaggedTests(unittest.TestCase):
         self.assertEqual(colls, ['JADES'])
 
 
+class InproceedingsFieldTests(unittest.TestCase):
+    def test_title_is_not_taken_from_booktitle(self):
+        blob = (
+            '@INPROCEEDINGS{Smith2020conf,\n'
+            '          author = {Smith, A.},\n'
+            '           title = {The Paper Title},\n'
+            '       booktitle = {Proceedings of the Conference},\n'
+            '            year = 2020\n'
+            '}\n'
+        )
+        parsed = adsresponse_to_dict(blob)
+        rec = next(iter(parsed.values()))
+        self.assertIn('The Paper Title', rec['title'])
+        self.assertIn('Proceedings of the Conference', rec['booktitle'])
+        self.assertNotIn('Proceedings', rec['title'])
+        from core import record_catalogue, strip_bib_braces
+        cat = record_catalogue(next(iter(parsed)), rec, [])
+        self.assertEqual(cat['title'], 'The Paper Title')
+        self.assertEqual(cat['journal'], 'Proceedings of the Conference')
+
+
 if __name__ == '__main__':
     unittest.main()

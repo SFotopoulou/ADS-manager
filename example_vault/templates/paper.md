@@ -10,7 +10,7 @@ adsurl:
 keywords:
 collections: []
 tags: []
-read_status: unread
+read_status: false
 relevance:
 pdf:
 ---

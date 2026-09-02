@@ -18,7 +18,7 @@ tags:
   - Extragalactic-astronomy
   - Galaxy-formation
   - Astrophysics-of-Galaxies
-read_status: unread
+read_status: false
 relevance: ""
 pdf: "[[pdfs/Eisenstein2025ApJS..281...50E.pdf]]"
 ---

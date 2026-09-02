@@ -20,7 +20,7 @@ tags:
   - Galaxy-evolution
   - Lyman-break-galaxies
   - Astrophysics-of-Galaxies
-read_status: unread
+read_status: false
 relevance: ""
 pdf: "[[pdfs/Eisenstein2026ApJS..283....6E.pdf]]"
 ---

@@ -514,6 +514,21 @@ def split_bib_records(bib_text):
     return records
 
 
+def _field_assignment_value(item, field):
+    """Return the assigned value if this line is `field = ...`, else None.
+
+    `title` must not match `booktitle`; `note` must not match `adsnote`.
+    """
+    stripped = item.lstrip()
+    prefix = field + ' ='
+    if stripped.startswith(prefix):
+        return stripped[len(prefix):].lstrip()
+    compact = field + '='
+    if stripped.startswith(compact):
+        return stripped[len(compact):].lstrip()
+    return None
+
+
 def adsresponse_to_dict(bib_received):
 
     list_bib = [chunk.lstrip()[1:] for chunk in split_bib_records(bib_received)]
@@ -553,21 +568,16 @@ def adsresponse_to_dict(bib_received):
             temp_dict = {}
             abs_loc = 0
             for field in fields:
+                matched = None
                 for i, item in enumerate(row):
-                
-                    if f'{field} =' in item:
-                        items = item.split(f'{field} = ')
-                        key = field
-                        value = items[1]                    
-                        if field.lower() == 'abstract':
-                            abs_loc = i 
-                #
-                try:
-                    temp_dict[key.strip()] = value.strip()
-                except Exception as error:
-                    print(row)
-                    print("An exception occurred:", type(error).__name__, "–", error) # An exception occurred: ZeroDivisionError – division by zero
-        
+                    value = _field_assignment_value(item, field)
+                    if value is None:
+                        continue
+                    matched = value
+                    if field.lower() == 'abstract':
+                        abs_loc = i
+                if matched is not None:
+                    temp_dict[field] = matched.strip() 
             #print(len(row))
             #print(kend)
             if has_abstract == True:
@@ -1115,10 +1125,24 @@ def parse_note_frontmatter(text):
         raw = raw.strip()
         if raw.startswith('"'):
             meta[key] = json.loads(raw)
+        elif raw.lower() in ('true', 'false'):
+            meta[key] = raw.lower() == 'true'
         else:
             meta[key] = raw
         i += 1
     return meta, body
+
+
+def coerce_read_status(value):
+    """Obsidian checkbox: true if read, false if unread."""
+    if isinstance(value, bool):
+        return value
+    if value is None or value == '':
+        return False
+    text = str(value).strip().lower().strip('"')
+    if text in ('true', 'yes', 'read', 'done', '1'):
+        return True
+    return False
 
 
 def record_catalogue(ads_key, record, collections, tag_prefix='',
@@ -1184,7 +1208,7 @@ def merge_note_body(existing_body, abstract):
 def write_paper_note(path, catalogue, abstract, existing_text=None, pdf_link=''):
     """Create or merge-update a paper note. Returns 'created' or 'updated'."""
     user_meta = {
-        'read_status': 'unread',
+        'read_status': False,
         'relevance': '',
         'pdf': pdf_link or '',
     }
@@ -1196,6 +1220,7 @@ def write_paper_note(path, catalogue, abstract, existing_text=None, pdf_link='')
                 user_meta[key] = old_meta[key]
         if not user_meta['pdf'] and pdf_link:
             user_meta['pdf'] = pdf_link
+        user_meta['read_status'] = coerce_read_status(user_meta.get('read_status'))
         old_coll = old_meta.get('collections') or []
         if isinstance(old_coll, str):
             old_coll = [old_coll] if old_coll else []
@@ -1233,6 +1258,7 @@ def reclean_paper_note(text):
     if isinstance(collections, str):
         collections = [collections]
     meta['collections'] = collections
+    meta['read_status'] = coerce_read_status(meta.get('read_status'))
     meta['tags'] = vault_tags(collections, keyword_list=meta.get('keywords') or [])
     if ADS_BODY_MARKER in body:
         prefix, user_part = body.split(ADS_BODY_MARKER, 1)

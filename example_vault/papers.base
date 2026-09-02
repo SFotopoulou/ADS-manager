@@ -38,7 +38,7 @@ views:
     name: Unread
     filters:
       and:
-        - 'read_status == "unread"'
+        - 'read_status == false'
     order:
       - file.name
       - year

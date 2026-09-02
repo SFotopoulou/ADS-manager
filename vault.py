@@ -1,5 +1,5 @@
 # Export ADS libraries into an Obsidian vault: paper notes, collection .bib files,
-# optional arXiv PDFs, and a project subset for Overleaf.
+# and optional arXiv PDFs.
 import argparse
 import os
 import shutil
@@ -22,7 +22,6 @@ from core import (
     write_paper_note,
     download_arxiv_pdf,
     arxiv_id_from_record,
-    filter_records,
     reclean_papers_dir,
     get_ads_token,
     records_from_bib,
@@ -56,11 +55,6 @@ fetch_pdfs = False
 add_keyword = True
 keep_only_myads_tags = False
 tag_prefix = ''
-# Overleaf subset: write projects/<project_name>/refs.bib
-project_name = 'example'
-# Empty = all exported citekeys; or comma-separated citekeys; or an ADS library slug
-project_citekeys = ''
-project_collection = ''
 # If ADS is unreachable, build from these BibTeX files (empty = auto-detect)
 offline_library_bib = 'library.bib'
 offline_tagged_bib = 'library_tagged.bib'
@@ -71,14 +65,13 @@ VAULT_DIRS = (
     'pdfs',
     'extracts',
     os.path.join('bib', 'collections'),
-    'projects',
     'templates',
     '.obsidian',
 )
 
 HOME_NOTE = """# Literature
 
-ADS is the catalogue. This vault is the reading and writing layer: one note per paper, local PDFs, and BibTeX for Overleaf.
+ADS is the catalogue. This vault is the reading and writing layer: one note per paper, local PDFs, and generated BibTeX.
 
 Requires Obsidian 1.9+ with the **Bases** core plugin enabled (Settings → Core plugins → Bases). **PDF++** is recommended for annotating files in `pdfs/`.
 
@@ -97,7 +90,6 @@ Generated BibTeX:
 - `bib/library.bib` — union of exported libraries
 - `bib/library_tagged.bib` — same union with ADS library names in keywords
 - `bib/collections/<library>.bib` — one file per ADS library
-- `projects/example/refs.bib` — Overleaf subset (defaults to the full export)
 
 Refresh from the repo root:
 
@@ -147,7 +139,7 @@ views:
     name: Unread
     filters:
       and:
-        - 'read_status == "unread"'
+        - 'read_status == false'
     order:
       - file.name
       - year
@@ -187,7 +179,7 @@ adsurl:
 keywords:
 collections: []
 tags: []
-read_status: unread
+read_status: false
 relevance:
 pdf:
 ---
@@ -274,7 +266,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Export ADS libraries into an Obsidian vault.',
         epilog=(
-            'Vault path, tagging, and project BibTeX defaults are set at the top of this script. '
+            'Vault path and tagging defaults are set at the top of this script. '
             'Auth: ADS_API_TOKEN or a local mysecrets file. '
             'With --offline, notes are rebuilt from library.bib and library_tagged.bib.'
         ),
@@ -720,18 +712,6 @@ def main(cli_vault=None, cli_libraries=None, fetch_pdfs_flag=False,
             f'PDFs downloaded={pdfs} already_present={pdf_exists} '
             f'no_arxiv={pdf_no_arxiv}'
         )
-
-    project_dir = os.path.join(root, 'projects', project_name)
-    os.makedirs(project_dir, exist_ok=True)
-    if project_collection and project_collection in library_records:
-        project_recs = library_records[project_collection]
-    elif project_citekeys.strip():
-        keys = [item.strip() for item in project_citekeys.split(',')]
-        project_recs = filter_records(all_records, keys)
-    else:
-        project_recs = all_records
-    write_bib(os.path.join(project_dir, 'refs.bib'), project_recs)
-    print(f'Wrote {len(project_recs)} entries to projects/{project_name}/refs.bib')
 
 
 if __name__ == '__main__':

@@ -22,7 +22,7 @@ tags:
   - galaxies-evolution
   - galaxies-high-redshift
   - Astrophysics-Astrophysics-of-Galaxies
-read_status: unread
+read_status: false
 relevance: ""
 pdf: "[[pdfs/Bunker2024A_A...690A.288B.pdf]]"
 ---

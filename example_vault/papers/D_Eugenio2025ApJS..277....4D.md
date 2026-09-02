@@ -24,7 +24,7 @@ tags:
   - Early-universe
   - Surveys
   - Astrophysics-Astrophysics-of-Galaxies
-read_status: unread
+read_status: false
 relevance: ""
 pdf: "[[pdfs/D_Eugenio2025ApJS..277....4D.pdf]]"
 ---
